@@ -9,14 +9,12 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-# Cleanup dev deps
 RUN npm prune --production
 
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV VAULT_PATH=/vault
 
-# Le vault est monté en volume
 VOLUME ["/vault"]
 
 EXPOSE 3000

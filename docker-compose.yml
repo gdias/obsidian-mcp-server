@@ -12,12 +12,10 @@ services:
       - VAULT_PATH=/vault
       - NODE_ENV=production
     volumes:
-      # Synchro locale → remplacer par le chemin réel de ton vault synchronisé
       - obsidian-vault:/vault
     labels:
-      # Labels Coolify / Traefik pour HTTPS automatique
       - "traefik.enable=true"
-      - "traefik.http.routers.obsidian-mcp.rule=Host(`mcp.TON-DOMAINE.fr`)"
+      - "traefik.http.routers.obsidian-mcp.rule=Host(`mcp.[DOMAIN]`)"
       - "traefik.http.routers.obsidian-mcp.entrypoints=websecure"
       - "traefik.http.routers.obsidian-mcp.tls.certresolver=letsencrypt"
       - "traefik.http.services.obsidian-mcp.loadbalancer.server.port=3000"
@@ -30,8 +28,3 @@ services:
 volumes:
   obsidian-vault:
     driver: local
-    # Si tu synchronises via Syncthing ou rclone, pointe vers le dossier hôte :
-    # driver_opts:
-    #   type: none
-    #   o: bind
-    #   device: /home/user/obsidian-vault
