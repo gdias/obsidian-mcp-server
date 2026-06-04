@@ -1,3 +1,0 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-export declare function registerReadTools(server: McpServer): void;
-//# sourceMappingURL=read.d.ts.map
