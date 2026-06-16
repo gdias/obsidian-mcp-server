@@ -5,30 +5,37 @@ import { registerReadTools } from "./tools/read.js";
 import { registerWriteTools } from "./tools/write.js";
 import { VAULT_PATH } from "./services/vault.js";
 
-const server = new McpServer({
-  name: "obsidian-mcp-server",
-  version: "1.0.0",
-});
-
-registerReadTools(server);
-registerWriteTools(server);
-
 async function main(): Promise<void> {
   const app = express();
   app.use(express.json({ limit: "10mb" }));
 
-  // Health check
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", vault: VAULT_PATH, timestamp: new Date().toISOString() });
+    res.json({
+      status: "ok",
+      vault: VAULT_PATH,
+      timestamp: new Date().toISOString(),
+    });
   });
 
-  // MCP endpoint
   app.post("/mcp", async (req, res) => {
+    const server = new McpServer({
+      name: "obsidian-mcp-server",
+      version: "1.0.0",
+    });
+
+    registerReadTools(server);
+    registerWriteTools(server);
+
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
-    res.on("close", () => transport.close());
+
+    res.on("close", () => {
+      transport.close();
+      server.close();
+    });
+
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
