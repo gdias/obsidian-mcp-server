@@ -11,6 +11,7 @@ services:
       - PORT=3000
       - VAULT_PATH=/vault
       - NODE_ENV=production
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
     volumes:
       - obsidian-vault:/vault
     labels:
