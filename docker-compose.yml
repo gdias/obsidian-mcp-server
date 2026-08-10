@@ -12,6 +12,12 @@ services:
       - VAULT_PATH=/vault
       - NODE_ENV=production
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      # OAuth 2.1 for Claude / remote MCP clients. Configure all three to enable it.
+      - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER}
+      - MCP_OAUTH_USERNAME=${MCP_OAUTH_USERNAME}
+      - MCP_OAUTH_PASSWORD=${MCP_OAUTH_PASSWORD}
+      - MCP_OAUTH_ACCESS_TOKEN_TTL=${MCP_OAUTH_ACCESS_TOKEN_TTL:-3600}
+      - MCP_OAUTH_REFRESH_TOKEN_TTL=${MCP_OAUTH_REFRESH_TOKEN_TTL:-2592000}
     volumes:
       - obsidian-vault:/vault
     labels:
