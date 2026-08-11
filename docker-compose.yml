@@ -1,12 +1,22 @@
-version: "3.8"
-
 services:
   obsidian-mcp:
-    build: .
-    container_name: obsidian-mcp-server
+    build:
+      context: .
+      args:
+        # Exposé sur /health pour identifier le build qui tourne.
+        # SOURCE_COMMIT est fourni par Coolify au build.
+        BUILD_REF: ${SOURCE_COMMIT:-unknown}
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # Pas de `container_name` : Coolify préfixe ses propres noms de conteneurs, et un nom
+    # fixe empêche la création du nouveau conteneur tant que l'ancien porte déjà ce nom —
+    # le déploiement échoue et l'ancienne version continue de répondre.
+    #
+    # Pas de `ports:` non plus : Coolify route via son proxy sur le réseau Docker, et
+    # publier 3000 sur l'hôte crée un conflit avec le conteneur sortant. Pour un
+    # `docker compose up` autonome hors Coolify, ajouter un docker-compose.override.yml
+    # avec `ports: ["3000:3000"]`.
+    expose:
+      - "3000"
     environment:
       - PORT=3000
       - VAULT_PATH=/vault
@@ -28,12 +38,9 @@ services:
     volumes:
       - obsidian-vault:/vault
       - obsidian-mcp-state:/data
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.obsidian-mcp.rule=Host(`mcp.[DOMAIN]`)"
-      - "traefik.http.routers.obsidian-mcp.entrypoints=websecure"
-      - "traefik.http.routers.obsidian-mcp.tls.certresolver=letsencrypt"
-      - "traefik.http.services.obsidian-mcp.loadbalancer.server.port=3000"
+    # Les labels Traefik sont générés par Coolify à partir du domaine configuré dans son
+    # UI. Ceux écrits à la main ici pointaient sur `mcp.[DOMAIN]`, un placeholder jamais
+    # substitué : ils créaient un routeur qui ne matchait rien.
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s

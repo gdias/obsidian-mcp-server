@@ -81,9 +81,14 @@ async function main(): Promise<void> {
   registerOAuthRoutes(app);
 
   // Health check : volontairement laissé public (ne révèle pas le contenu du vault).
+  // `build` et `auth` sont là pour répondre sans accès au serveur aux deux questions
+  // qui bloquent un débogage de déploiement : quelle version tourne, et dans quel
+  // mode d'authentification.
   app.get("/health", (_req, res) => {
     res.json({
       status: "ok",
+      build: process.env.BUILD_REF || "unknown",
+      auth: isOAuthEnabled() ? "oauth" : "static-token",
       timestamp: new Date().toISOString(),
     });
   });

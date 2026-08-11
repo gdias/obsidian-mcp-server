@@ -11,6 +11,10 @@ RUN npm run build
 
 RUN npm prune --production
 
+# Surfaced on /health so the running build can be identified from outside.
+ARG BUILD_REF=unknown
+ENV BUILD_REF=$BUILD_REF
+
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV VAULT_PATH=/vault
