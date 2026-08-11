@@ -22,8 +22,12 @@ services:
       - MCP_OAUTH_CLIENT_NAME=${MCP_OAUTH_CLIENT_NAME}
       - MCP_OAUTH_ACCESS_TOKEN_TTL=${MCP_OAUTH_ACCESS_TOKEN_TTL:-3600}
       - MCP_OAUTH_REFRESH_TOKEN_TTL=${MCP_OAUTH_REFRESH_TOKEN_TTL:-2592000}
+      # Registered clients + refresh tokens survive redeploys here. Kept out of /vault
+      # so it never shows up as a note in Obsidian.
+      - MCP_OAUTH_STATE_PATH=/data/oauth-state.json
     volumes:
       - obsidian-vault:/vault
+      - obsidian-mcp-state:/data
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.obsidian-mcp.rule=Host(`mcp.[DOMAIN]`)"
@@ -38,4 +42,6 @@ services:
 
 volumes:
   obsidian-vault:
+    driver: local
+  obsidian-mcp-state:
     driver: local

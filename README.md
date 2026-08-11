@@ -44,7 +44,14 @@ Authorization Code + PKCE, puis renouvelle ses jetons automatiquement.
 | `MCP_OAUTH_PASSWORD` | — | Mot de passe du propriétaire du vault (à générer long et aléatoire) |
 | `MCP_OAUTH_ACCESS_TOKEN_TTL` | `3600` | Durée de vie d'un access token, en secondes |
 | `MCP_OAUTH_REFRESH_TOKEN_TTL` | `2592000` | Durée de vie d'un refresh token, en secondes |
+| `MCP_OAUTH_STATE_PATH` | `/data/oauth-state.json` | Fichier où sont conservés les clients enregistrés et les refresh tokens |
 | `MCP_AUTH_TOKEN` | — | Mode de repli historique par Bearer statique ; obligatoire seulement sans OAuth |
+
+> Les trois variables `MCP_OAUTH_*` obligatoires doivent être présentes **dans le
+> conteneur**. Si elles manquent, le serveur ne refuse pas de démarrer : il retombe
+> sur le Bearer statique et n'expose aucun endpoint OAuth, ce qui se traduit côté
+> Claude par un échec de connexion sans explication. Le log de démarrage indique
+> toujours le mode retenu — voir [Dépannage](#dépannage).
 
 Exemple de `.env` :
 
@@ -67,13 +74,48 @@ MCP_OAUTH_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
 
 | Endpoint | Rôle |
 | --- | --- |
-| `/.well-known/oauth-protected-resource` | Découverte MCP/RFC 9728 |
-| `/.well-known/oauth-authorization-server` | Métadonnées OAuth 2.1 |
+| `/.well-known/oauth-protected-resource[/mcp]` | Découverte MCP/RFC 9728 |
+| `/.well-known/oauth-authorization-server[/mcp]` | Métadonnées OAuth 2.1 (RFC 8414) |
+| `/.well-known/openid-configuration[/mcp]` | Même document, pour les clients qui basculent sur la découverte OIDC |
 | `/register` | Enregistrement dynamique du client (RFC 7591) |
 | `/authorize` | Connexion et consentement utilisateur |
 | `/token` | Échange et renouvellement des jetons |
 
-Les anciens chemins préfixés par `/oauth` restent acceptés pour compatibilité.
+Les variantes suffixées par `/mcp` existent parce que les clients sondent
+`/.well-known/<suffixe>/mcp` **avant** de se rabattre sur la racine. Les anciens
+chemins préfixés par `/oauth` restent acceptés pour compatibilité.
 
-Les clients et jetons sont conservés en mémoire : redémarrer le conteneur invalide
-les sessions OAuth existantes et demandera simplement une nouvelle connexion.
+Les clients enregistrés et les refresh tokens sont écrits dans
+`MCP_OAUTH_STATE_PATH` et survivent donc à un redéploiement : Claude conserve son
+`client_id` indéfiniment, et le perdre casserait la connexion sans moyen de la
+rétablir autrement qu'en supprimant puis réajoutant le serveur. Les access tokens
+restent en mémoire (une heure de durée de vie, renouvelés automatiquement).
+
+Ce fichier contient des secrets porteurs : il est écrit en `0600` et doit rester
+sur un volume privé.
+
+## Dépannage
+
+**Claude ne parvient pas à se connecter.** Vérifier d'abord quel mode
+d'authentification tourne réellement :
+
+```bash
+docker compose logs obsidian-mcp | grep -E "Authentication|OAuth"
+```
+
+- `🔐 Authentication: OAuth 2.1` → OAuth est actif.
+- `⚠️  OAuth inactif — variables manquantes : …` → les variables ne sont pas arrivées
+  dans le conteneur. Le `.env` doit être à côté du `docker-compose.yml` sur le
+  serveur, puis `docker compose up -d --build` (un simple `restart` ne relit pas
+  le `.env`).
+
+Le test décisif, sans client :
+
+```bash
+curl -si -X POST https://mcp.example.fr/mcp -d '{}' -H 'Content-Type: application/json' \
+  | grep -i www-authenticate
+```
+
+Cet en-tête est le seul point d'entrée de la découverte OAuth. S'il est absent,
+aucun client ne peut trouver le serveur d'autorisation, et `/authorize` comme
+`/register` répondront 404.
