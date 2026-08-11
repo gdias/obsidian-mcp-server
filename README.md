@@ -54,15 +54,26 @@ MCP_OAUTH_USERNAME=guillaume
 MCP_OAUTH_PASSWORD=changez-ceci-par-un-secret-long-et-aleatoire
 ```
 
+Si Claude ouvre déjà une URL contenant `client_id=gdias`, enregistrez ce client
+dans le même `.env` (sinon Claude utilisera l'enregistrement dynamique) :
+
+```env
+MCP_OAUTH_CLIENT_ID=gdias
+MCP_OAUTH_CLIENT_NAME=Claude
+MCP_OAUTH_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
+```
+
 ### Endpoints OAuth exposés
 
 | Endpoint | Rôle |
 | --- | --- |
 | `/.well-known/oauth-protected-resource` | Découverte MCP/RFC 9728 |
 | `/.well-known/oauth-authorization-server` | Métadonnées OAuth 2.1 |
-| `/oauth/register` | Enregistrement dynamique du client (RFC 7591) |
-| `/oauth/authorize` | Connexion et consentement utilisateur |
-| `/oauth/token` | Échange et renouvellement des jetons |
+| `/register` | Enregistrement dynamique du client (RFC 7591) |
+| `/authorize` | Connexion et consentement utilisateur |
+| `/token` | Échange et renouvellement des jetons |
+
+Les anciens chemins préfixés par `/oauth` restent acceptés pour compatibilité.
 
 Les clients et jetons sont conservés en mémoire : redémarrer le conteneur invalide
 les sessions OAuth existantes et demandera simplement une nouvelle connexion.

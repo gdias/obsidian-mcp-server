@@ -4,6 +4,9 @@ import type { Express, Request, Response } from "express";
 const OAUTH_USERNAME = process.env.MCP_OAUTH_USERNAME;
 const OAUTH_PASSWORD = process.env.MCP_OAUTH_PASSWORD;
 const OAUTH_ISSUER = process.env.MCP_OAUTH_ISSUER?.replace(/\/$/, "");
+const OAUTH_CLIENT_ID = process.env.MCP_OAUTH_CLIENT_ID;
+const OAUTH_REDIRECT_URIS = process.env.MCP_OAUTH_REDIRECT_URIS?.split(",").map((uri) => uri.trim()).filter(Boolean);
+const OAUTH_CLIENT_NAME = process.env.MCP_OAUTH_CLIENT_NAME;
 const ACCESS_TOKEN_TTL_SECONDS = parsePositiveInt(process.env.MCP_OAUTH_ACCESS_TOKEN_TTL, 3600);
 const REFRESH_TOKEN_TTL_SECONDS = parsePositiveInt(process.env.MCP_OAUTH_REFRESH_TOKEN_TTL, 60 * 60 * 24 * 30);
 const SCOPES = ["obsidian.read", "obsidian.write"];
@@ -96,7 +99,7 @@ function authorizationError(res: Response, redirectUri: string, error: string, s
 
 function htmlPage(fields: Record<string, string>): string {
   const escape = (input: string) => input.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char] as string);
-  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autoriser Obsidian MCP</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}label,input{display:block;width:100%;box-sizing:border-box;margin:.4rem 0}button{margin-top:1rem;padding:.6rem 1rem}</style></head><body><h1>Autoriser Obsidian MCP</h1><p>Vous autorisez <strong>${escape(fields.clientName)}</strong> à accéder à votre vault Obsidian.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="${escape(fields.requestId)}"><label>Identifiant<input name="username" autocomplete="username" required></label><label>Mot de passe<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Autoriser</button></form></body></html>`;
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autoriser Obsidian MCP</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}label,input{display:block;width:100%;box-sizing:border-box;margin:.4rem 0}button{margin-top:1rem;padding:.6rem 1rem}</style></head><body><h1>Autoriser Obsidian MCP</h1><p>Vous autorisez <strong>${escape(fields.clientName)}</strong> à accéder à votre vault Obsidian.</p><form method="post" action="/authorize"><input type="hidden" name="request_id" value="${escape(fields.requestId)}"><label>Identifiant<input name="username" autocomplete="username" required></label><label>Mot de passe<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Autoriser</button></form></body></html>`;
 }
 
 export function isOAuthEnabled(): boolean {
@@ -105,9 +108,10 @@ export function isOAuthEnabled(): boolean {
 
 export function oauthConfigurationError(): string | undefined {
   const anyConfigured = Boolean(OAUTH_USERNAME || OAUTH_PASSWORD || OAUTH_ISSUER);
-  return anyConfigured && !isOAuthEnabled()
-    ? "MCP_OAUTH_USERNAME, MCP_OAUTH_PASSWORD and MCP_OAUTH_ISSUER must be configured together"
-    : undefined;
+  if (anyConfigured && !isOAuthEnabled()) return "MCP_OAUTH_USERNAME, MCP_OAUTH_PASSWORD and MCP_OAUTH_ISSUER must be configured together";
+  if (Boolean(OAUTH_CLIENT_ID) !== Boolean(OAUTH_REDIRECT_URIS?.length)) return "MCP_OAUTH_CLIENT_ID and MCP_OAUTH_REDIRECT_URIS must be configured together";
+  if (OAUTH_REDIRECT_URIS && !OAUTH_REDIRECT_URIS.every(validRedirectUri)) return "MCP_OAUTH_REDIRECT_URIS contains an invalid redirect URI";
+  return undefined;
 }
 
 export function requireOAuthToken(req: Request, res: Response): boolean {
@@ -126,6 +130,11 @@ export function requireOAuthToken(req: Request, res: Response): boolean {
 
 export function registerOAuthRoutes(app: Express): void {
   if (!isOAuthEnabled()) return;
+  // Optional pre-registration supports clients such as Claude that are already
+  // configured with a fixed client_id instead of dynamic registration.
+  if (OAUTH_CLIENT_ID && OAUTH_REDIRECT_URIS) {
+    clients.set(OAUTH_CLIENT_ID, { redirectUris: OAUTH_REDIRECT_URIS, clientName: OAUTH_CLIENT_NAME });
+  }
 
   app.get("/.well-known/oauth-protected-resource", (req, res) => {
     const issuer = baseUrl(req);
@@ -134,10 +143,10 @@ export function registerOAuthRoutes(app: Express): void {
 
   app.get("/.well-known/oauth-authorization-server", (req, res) => {
     const issuer = baseUrl(req);
-    res.json({ issuer, authorization_endpoint: `${issuer}/oauth/authorize`, token_endpoint: `${issuer}/oauth/token`, registration_endpoint: `${issuer}/oauth/register`, response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"], scopes_supported: SCOPES });
+    res.json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, registration_endpoint: `${issuer}/register`, response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"], scopes_supported: SCOPES });
   });
 
-  app.post("/oauth/register", (req, res) => {
+  app.post(["/register", "/oauth/register"], (req, res) => {
     const redirectUris = req.body?.redirect_uris;
     if (!Array.isArray(redirectUris) || redirectUris.length === 0 || !redirectUris.every(validRedirectUri)) {
       oauthError(res, "invalid_client_metadata", "redirect_uris must contain valid HTTPS URLs (or 127.0.0.1 HTTP URLs)");
@@ -148,7 +157,7 @@ export function registerOAuthRoutes(app: Express): void {
     res.status(201).json({ client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000), redirect_uris: redirectUris, token_endpoint_auth_method: "none" });
   });
 
-  app.get("/oauth/authorize", (req, res) => {
+  app.get(["/authorize", "/oauth/authorize"], (req, res) => {
     cleanup();
     const { client_id: clientId, redirect_uri: redirectUri, response_type: responseType, state, code_challenge: challenge, code_challenge_method: method } = req.query;
     if (typeof clientId !== "string" || typeof redirectUri !== "string") return res.status(400).send("Invalid OAuth client or redirect URI");
@@ -163,7 +172,7 @@ export function registerOAuthRoutes(app: Express): void {
     res.type("html").send(htmlPage({ clientName: client.clientName ?? "un client OAuth", requestId }));
   });
 
-  app.post("/oauth/authorize", (req, res) => {
+  app.post(["/authorize", "/oauth/authorize"], (req, res) => {
     cleanup();
     const requestId = typeof req.body?.request_id === "string" ? req.body.request_id : "";
     const pending = pendingAuthorizations.get(requestId);
@@ -178,7 +187,7 @@ export function registerOAuthRoutes(app: Express): void {
     res.redirect(303, target.toString());
   });
 
-  app.post("/oauth/token", (req, res) => {
+  app.post(["/token", "/oauth/token"], (req, res) => {
     cleanup();
     const grantType = req.body?.grant_type;
     if (grantType === "authorization_code") {
