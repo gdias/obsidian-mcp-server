@@ -144,21 +144,45 @@ function cleanup(): void {
   if (expiredRefreshToken) persistState();
 }
 
+function escapeHtml(input: string): string {
+  return input.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char] as string);
+}
+
 function oauthError(res: Response, error: string, description: string, status = 400): void {
+  console.error(`OAuth /token error: ${error} — ${description}`);
   res.status(status).json({ error, error_description: description });
 }
 
 function authorizationError(res: Response, redirectUri: string, error: string, state?: string): void {
   const target = new URL(redirectUri);
   target.searchParams.set("error", error);
-  if (state) target.searchParams.set("state", state);
-  res.redirect(303, target.toString());
+  if (state !== undefined) target.searchParams.set("state", state);
+  // Top-level breakout: Claude often embeds /authorize in an iframe/webview; a bare
+  // 303 would only navigate the iframe and leave the parent spinner hanging.
+  redirectUserAgent(res, target.toString());
+}
+
+/** Navigate the top-level window to the client redirect (iframe/webview safe). */
+function redirectUserAgent(res: Response, url: string): void {
+  const safeUrl = escapeHtml(url);
+  res
+    .status(200)
+    .set(
+      "Content-Security-Policy",
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+    )
+    .type("html")
+    .send(
+      `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${safeUrl}"><title>Redirection…</title><script>window.top.location.replace(${JSON.stringify(url)});</script></head><body><p>Redirection en cours… <a href="${safeUrl}">Continuer</a></p></body></html>`
+    );
 }
 
 function htmlPage(fields: { clientName: string; requestId: string; error?: string }): string {
-  const escape = (input: string) => input.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char] as string);
-  const error = fields.error ? `<p role="alert" style="color:#b00020"><strong>${escape(fields.error)}</strong></p>` : "";
-  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autoriser Obsidian MCP</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}label,input{display:block;width:100%;box-sizing:border-box;margin:.4rem 0}button{margin-top:1rem;padding:.6rem 1rem}</style></head><body><h1>Autoriser Obsidian MCP</h1><p>Vous autorisez <strong>${escape(fields.clientName)}</strong> à accéder à votre vault Obsidian.</p>${error}<form method="post" action="/authorize"><input type="hidden" name="request_id" value="${escape(fields.requestId)}"><label>Identifiant<input name="username" autocomplete="username" required></label><label>Mot de passe<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Autoriser</button></form></body></html>`;
+  const error = fields.error ? `<p role="alert" style="color:#b00020"><strong>${escapeHtml(fields.error)}</strong></p>` : "";
+  // action uses the public issuer (not a relative URL) so a reverse-proxy path rewrite
+  // cannot POST to the wrong host; target=_top escapes Claude's iframe/webview.
+  const action = `${OAUTH_ISSUER}/authorize`;
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autoriser Obsidian MCP</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem}label,input{display:block;width:100%;box-sizing:border-box;margin:.4rem 0}button{margin-top:1rem;padding:.6rem 1rem}</style></head><body><h1>Autoriser Obsidian MCP</h1><p>Vous autorisez <strong>${escapeHtml(fields.clientName)}</strong> à accéder à votre vault Obsidian.</p>${error}<form method="post" action="${escapeHtml(action)}" target="_top"><input type="hidden" name="request_id" value="${escapeHtml(fields.requestId)}"><label>Identifiant<input name="username" autocomplete="username" required></label><label>Mot de passe<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Autoriser</button></form></body></html>`;
 }
 
 export function isOAuthEnabled(): boolean {
@@ -277,7 +301,10 @@ export function registerOAuthRoutes(app: Express): void {
     const scope = requestedScope(req.query.scope);
     const requestId = randomToken();
     pendingAuthorizations.set(requestId, { clientId, redirectUri, state: typeof state === "string" ? state : undefined, codeChallenge: challenge, scope, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
-    res.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'");
+    res.set(
+      "Content-Security-Policy",
+      `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${OAUTH_ISSUER}; base-uri 'none'`
+    );
     res.type("html").send(htmlPage({ clientName: client.clientName ?? "un client OAuth", requestId }));
   });
 
@@ -295,16 +322,20 @@ export function registerOAuthRoutes(app: Express): void {
         return res.status(401).send("Too many failed attempts. Please restart the connection.");
       }
       const client = clients.get(pending.clientId);
-      res.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'");
+      res.set(
+        "Content-Security-Policy",
+        `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${OAUTH_ISSUER}; base-uri 'none'`
+      );
       return res.status(401).type("html").send(htmlPage({ clientName: client?.clientName ?? "un client OAuth", requestId, error: "Identifiant ou mot de passe incorrect." }));
     }
     pendingAuthorizations.delete(requestId);
     const code = randomToken();
-    authorizationCodes.set(code, { ...pending, expiresAt: Date.now() + 60 * 1000 });
+    authorizationCodes.set(code, { ...pending, expiresAt: Date.now() + 5 * 60 * 1000 });
     const target = new URL(pending.redirectUri);
     target.searchParams.set("code", code);
-    if (pending.state) target.searchParams.set("state", pending.state);
-    res.redirect(303, target.toString());
+    if (pending.state !== undefined) target.searchParams.set("state", pending.state);
+    console.error(`OAuth: authorization code issued for client ${pending.clientId}`);
+    redirectUserAgent(res, target.toString());
   });
 
   app.post(["/token", "/oauth/token"], (req, res) => {
@@ -314,18 +345,24 @@ export function registerOAuthRoutes(app: Express): void {
       const code = typeof req.body.code === "string" ? req.body.code : "";
       const record = authorizationCodes.get(code);
       authorizationCodes.delete(code);
-      if (!record || record.expiresAt <= Date.now() || req.body.client_id !== record.clientId || req.body.redirect_uri !== record.redirectUri) return oauthError(res, "invalid_grant", "Invalid or expired authorization code");
+      if (!record || record.expiresAt <= Date.now() || req.body.client_id !== record.clientId || req.body.redirect_uri !== record.redirectUri) {
+        return oauthError(res, "invalid_grant", "Invalid or expired authorization code");
+      }
       const verifier = typeof req.body.code_verifier === "string" ? req.body.code_verifier : "";
       const challenge = createHash("sha256").update(verifier).digest("base64url");
       if (!verifier || !equal(challenge, record.codeChallenge)) return oauthError(res, "invalid_grant", "PKCE verification failed");
+      console.error(`OAuth: access token issued (authorization_code) for client ${record.clientId}`);
       return sendTokens(res, record.clientId, record.scope);
     }
     if (grantType === "refresh_token") {
       const refreshToken = typeof req.body.refresh_token === "string" ? req.body.refresh_token : "";
       const record = refreshTokens.get(refreshToken);
-      if (!record || record.expiresAt <= Date.now() || req.body.client_id !== record.clientId) return oauthError(res, "invalid_grant", "Invalid or expired refresh token");
+      if (!record || record.expiresAt <= Date.now() || req.body.client_id !== record.clientId) {
+        return oauthError(res, "invalid_grant", "Invalid or expired refresh token");
+      }
       // OAuth 2.1 §4.3.1 requires rotation for public clients.
       refreshTokens.delete(refreshToken);
+      console.error(`OAuth: access token issued (refresh_token) for client ${record.clientId}`);
       return sendTokens(res, record.clientId, record.scope);
     }
     oauthError(res, "unsupported_grant_type", "Only authorization_code and refresh_token are supported");
